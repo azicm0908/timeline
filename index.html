@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>클라우드 타임라인 (PC 리사이즈 지원)</title>
+    <style>
+        :root { --primary-color: #4a90e2; --bg-color: #f8f9fa; --card-bg: #ffffff; --grid-color: #e9ecef; --text-color: #2d3436; }
+        body { font-family: 'Pretendard', -apple-system, sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px; }
+        
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
+        .header h2 { margin: 0; font-size: 1.2rem; }
+        .auth-section { display: flex; align-items: center; gap: 10px; }
+        .user-info { font-size: 0.9rem; font-weight: 600; color: var(--primary-color); display: none; }
+        
+        .toolbar { background: var(--card-bg); padding: 15px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .toolbar select { padding: 6px; border-radius: 6px; border: 1px solid #ccc; font-family: inherit; }
+
+        #timeline-wrapper { background: var(--card-bg); border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow-x: auto; position: relative; }
+        #timeline-container { position: relative; min-height: 450px; width: 100%; min-width: 800px; cursor: crosshair; transition: height 0.3s; }
+
+        .grid-line { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--grid-color); }
+        .grid-label { position: absolute; top: 10px; font-size: 12px; color: #adb5bd; font-weight: bold; padding-left: 8px; }
+
+        /* 이벤트 블록 */
+        .event-block { 
+            position: absolute; height: 30px; border-radius: 6px; color: white; padding: 0 10px; 
+            font-size: 12px; font-weight: 600; display: flex; align-items: center; user-select: none; 
+            z-index: 2; box-shadow: 0 2px 4px rgba(0,0,0,0.15); white-space: nowrap; overflow: hidden; 
+            text-overflow: ellipsis; cursor: grab;
+        }
+        .event-block:active { cursor: grabbing; transform: scale(0.98); }
+
+        /* 🌟 양끝 사이즈 조절 핸들 (투명하게 배치) 🌟 */
+        .resize-handle { 
+            position: absolute; top: 0; bottom: 0; width: 8px; z-index: 10; 
+            transition: background 0.2s;
+        }
+        .resize-handle.left { left: 0; cursor: w-resize; border-radius: 6px 0 0 6px; }
+        .resize-handle.right { right: 0; cursor: e-resize; border-radius: 0 6px 6px 0; }
+        /* 마우스 올렸을 때 살짝 밝아지며 조절 가능함을 알림 */
+        .resize-handle:hover { background: rgba(255, 255, 255, 0.4); }
+
+        .color-palette { display: flex; gap: 10px; margin: 10px 0 20px 0; flex-wrap: wrap; }
+        .color-opt { width: 32px; height: 32px; border-radius: 50%; cursor: pointer; border: 3px solid transparent; transition: 0.2s; }
+        .color-opt.active { border-color: #2d3436; transform: scale(1.15); }
+
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; z-index: 1000; }
+        .modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 25px; border-radius: 16px; width: 350px; display: none; z-index: 1001; box-shadow: 0 10px 30px rgba(0,0,0,0.2); box-sizing: border-box;}
+        input[type="text"], textarea { width: 100%; padding: 10px; margin: 8px 0 18px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-family: inherit;}
+        
+        .btn { padding: 8px 14px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; transition: 0.2s; font-size: 13px; }
+        .btn-save-all { background: #2d3436; color: white; }
+        .btn-submit { background: var(--primary-color); color: white; flex: 1; }
+        .btn-delete { background: #ff4757; color: white; }
+        .btn-cancel { background: #e9ecef; }
+        .btn-add { background: var(--primary-color); color: white; padding: 8px 16px; font-size: 14px; }
+        
+        .btn-login { background: white; color: #333; border: 1px solid #ccc; display: flex; align-items: center; gap: 5px; }
+        .btn-logout { background: #ff4757; color: white; display: none; }
+
+        #ghost-box { position: absolute; background: rgba(74, 144, 226, 0.15); border: 2px dashed var(--primary-color); display: none; pointer-events: none; z-index: 1; }
+        #loading { position: fixed; top: 0; left: 0; width: 100%; height: 3px; background: var(--primary-color); z-index: 2000; display: none; }
+        #login-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); z-index: 50; display: flex; justify-content: center; align-items: center; font-weight: bold; color: #333; flex-direction: column; gap: 10px;}
+    </style>
+</head>
+<body>
+
+    <div id="loading"></div>
+
+    <div class="header">
+        <h2>🗓️ 개인용 타임라인 (PC 모드)</h2>
+        <div class="auth-section">
+            <span class="user-info" id="user-info">사용자님</span>
+            <button class="btn btn-login" id="btn-login" onclick="login()">🔐 구글 로그인</button>
+            <button class="btn btn-logout" id="btn-logout" onclick="logout()">로그아웃</button>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div>
+            <strong>조회 기간:</strong> 
+            <select id="view-start" onchange="updateView()"></select> ~ 
+            <select id="view-end" onchange="updateView()"></select>
+        </div>
+        <div style="margin-left: auto; display: flex; gap: 8px;">
+            <button class="btn btn-save-all" onclick="manualSave()">💾 클라우드 저장</button>
+            <button class="btn btn-add" onclick="openModal()">➕ 추가</button>
+        </div>
+    </div>
+
+    <div id="timeline-wrapper">
+        <div id="login-overlay">
+            <div>보안 모드가 켜져 있습니다.</div>
+            <div style="font-size:0.8rem; color:#666;">로그인하여 나만의 데이터를 확인하세요.</div>
+        </div>
+        <div id="timeline-container">
+            <div id="ghost-box"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="overlay" onclick="closeModal()"></div>
+    <div class="modal" id="modal">
+        <h3 id="modal-title" style="margin-top:0">일정 편집</h3>
+        <label>제목</label>
+        <input type="text" id="ev-title" placeholder="일정 제목">
+        <label>상세 내용</label>
+        <textarea id="ev-content" rows="3" placeholder="내용을 입력하세요"></textarea>
+        <label>색상 선택</label>
+        <div class="color-palette" id="palette-container"></div>
+        <div style="display: flex; gap: 8px;">
+            <button class="btn btn-delete" id="btn-del" onclick="deleteEvent()">삭제</button>
+            <button class="btn btn-cancel" onclick="closeModal()">취소</button>
+            <button class="btn btn-submit" onclick="saveEvent()">확인</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+
+        // 🔥 본인의 Firebase 설정값으로 변경하세요 🔥
+        const firebaseConfig = {
+ 		apiKey: "AIzaSyAKRpo5DeUYKLwdpWS2NOb0zM8YHbQg1nU",
+		authDomain: "timeline-app-ecb49.firebaseapp.com",
+    		projectId: "timeline-app-ecb49",
+    		storageBucket: "timeline-app-ecb49.firebasestorage.app",
+ 		messagingSenderId: "394895665522",
+    		appId: "1:394895665522:web:07c58b5ea2d6c3154595eb"
+
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const provider = new GoogleAuthProvider();
+        
+        let currentUser = null; 
+        let docRef = null; 
+
+        const container = document.getElementById('timeline-container');
+        const ghostBox = document.getElementById('ghost-box');
+        const overlay = document.getElementById('overlay');
+        const modal = document.getElementById('modal');
+        const loading = document.getElementById('loading');
+        
+        const colors = ['#4A90E2', '#47D1C1', '#50C878', '#F1C40F', '#E67E22', '#E74C3C', '#9B59B6', '#95A5A6'];
+        let events = [];
+        let viewStartM = 1, viewEndM = 12, totalM = 12;
+        
+        let isCreating = false, isMoving = false, movingEvent = null;
+        let isResizing = false, resizeSide = null, initialStartM, initialEndM;
+        let startX, currentX, offsetLeft, selectedId = null, selectedColor = colors[0];
+        let hasDragged = false; 
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                document.getElementById('btn-login').style.display = 'none';
+                document.getElementById('btn-logout').style.display = 'block';
+                document.getElementById('user-info').style.display = 'block';
+                document.getElementById('user-info').innerText = user.displayName + "님";
+                document.getElementById('login-overlay').style.display = 'none';
+                
+                docRef = doc(db, "timelines", user.uid);
+                loadData(); 
+            } else {
+                currentUser = null; events = [];
+                document.getElementById('btn-login').style.display = 'flex';
+                document.getElementById('btn-logout').style.display = 'none';
+                document.getElementById('user-info').style.display = 'none';
+                document.getElementById('login-overlay').style.display = 'flex';
+                renderEvents();
+            }
+        });
+
+        async function loadData() {
+            showLoading(true);
+            try {
+                const snap = await getDoc(docRef);
+                events = snap.exists() ? snap.data().events || [] : [];
+                renderEvents();
+            } catch(e) { console.error(e); }
+            showLoading(false);
+        }
+
+        async function init() {
+            const selStart = document.getElementById('view-start');
+            const selEnd = document.getElementById('view-end');
+            for(let i=1; i<=12; i++) {
+                selStart.innerHTML += `<option value="${i}">${i}월</option>`;
+                selEnd.innerHTML += `<option value="${i}" ${i===12?'selected':''}>${i}월</option>`;
+            }
+            renderPalette(); updateView();
+        }
+
+        window.login = () => signInWithPopup(auth, provider).catch(error => alert("로그인 에러: " + error.message));
+        window.logout = () => signOut(auth);
+        window.updateView = updateView; window.closeModal = closeModal; window.saveEvent = saveEvent; 
+        window.deleteEvent = deleteEvent; window.manualSave = manualSave; window.openModal = openModal;
+
+        function showLoading(show) { loading.style.display = show ? 'block' : 'none'; }
+
+        function updateView() {
+            const s = parseInt(document.getElementById('view-start').value);
+            let e = parseInt(document.getElementById('view-end').value);
+            if(s > e) { e = s; document.getElementById('view-end').value = e; }
+            viewStartM = s; viewEndM = e; totalM = viewEndM - viewStartM + 1;
+            renderGrid(); renderEvents();
+        }
+
+        function renderGrid() {
+            container.querySelectorAll('.grid-line, .grid-label').forEach(l => l.remove());
+            for (let i = 0; i <= totalM; i++) {
+                const pos = (i / totalM) * 100;
+                const line = document.createElement('div'); line.className = 'grid-line'; line.style.left = pos + '%'; container.appendChild(line);
+                if (i < totalM) {
+                    const lbl = document.createElement('div'); lbl.className = 'grid-label'; lbl.style.left = pos + '%'; lbl.innerText = (viewStartM + i) + '월'; container.appendChild(lbl);
+                }
+            }
+        }
+
+        function renderEvents() {
+            container.querySelectorAll('.event-block').forEach(b => b.remove());
+            events.sort((a, b) => a.startMonth - b.startMonth);
+            const rows = [];
+            
+            events.forEach(ev => {
+                if (ev.endMonth <= viewStartM || ev.startMonth >= viewEndM + 1) return;
+                let rIdx = rows.findIndex(rEnd => rEnd <= ev.startMonth);
+                if (rIdx === -1) { rows.push(ev.endMonth); rIdx = rows.length - 1; } else { rows[rIdx] = ev.endMonth; }
+                
+                const el = document.createElement('div');
+                el.className = 'event-block';
+                el.style.left = ((ev.startMonth - viewStartM) / totalM * 100) + '%';
+                el.style.width = ((ev.endMonth - ev.startMonth) / totalM * 100) + '%';
+                el.style.top = (45 + (rIdx * 40)) + 'px';
+                el.style.backgroundColor = ev.color;
+                
+                const span = document.createElement('span'); 
+                span.innerText = ev.title; 
+                el.appendChild(span);
+
+                // 🌟 길이 조절 핸들 생성 및 이벤트 등록 🌟
+                const hLeft = document.createElement('div'); hLeft.className = 'resize-handle left';
+                const hRight = document.createElement('div'); hRight.className = 'resize-handle right';
+                el.appendChild(hLeft); el.appendChild(hRight);
+
+                hLeft.onmousedown = (e) => {
+                    if (!currentUser) return;
+                    e.stopPropagation(); // 이동 로직과 겹치지 않도록 차단
+                    isResizing = true; resizeSide = 'left'; movingEvent = ev; hasDragged = false;
+                    startX = e.clientX - container.getBoundingClientRect().left;
+                    initialStartM = ev.startMonth; initialEndM = ev.endMonth;
+                };
+
+                hRight.onmousedown = (e) => {
+                    if (!currentUser) return;
+                    e.stopPropagation(); 
+                    isResizing = true; resizeSide = 'right'; movingEvent = ev; hasDragged = false;
+                    startX = e.clientX - container.getBoundingClientRect().left;
+                    initialStartM = ev.startMonth; initialEndM = ev.endMonth;
+                };
+                
+                // 블록 마우스 다운 (위치 이동 준비)
+                el.onmousedown = (e) => { 
+                    if (!currentUser) return;
+                    e.stopPropagation(); 
+                    isMoving = true; 
+                    movingEvent = ev; 
+                    hasDragged = false;
+                    offsetLeft = e.clientX - el.getBoundingClientRect().left; 
+                };
+
+                // 블록 클릭 (수정 모달) - 드래그 안 하고 클릭만 했을 때
+                el.onclick = () => { 
+                    if (!hasDragged && currentUser) openModal(ev.id); 
+                };
+
+                container.appendChild(el);
+            });
+            container.style.height = Math.max(450, (rows.length * 40) + 100) + 'px';
+        }
+
+        // 배경 마우스 다운 (생성 준비)
+        container.onmousedown = (e) => {
+            if (e.target !== container && !e.target.classList.contains('grid-line')) return;
+            if (!currentUser) return;
+            isCreating = true; 
+            startX = e.clientX - container.getBoundingClientRect().left;
+            ghostBox.style.display = 'block'; 
+            ghostBox.style.left = startX + 'px'; 
+            ghostBox.style.width = '0';
+        };
+
+        // 전역 마우스 무브 (이동, 리사이징, 생성 시각화)
+        document.onmousemove = (e) => {
+            if (!isCreating && !isMoving && !isResizing) return;
+            
+            const rect = container.getBoundingClientRect();
+            currentX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+
+            if (isCreating) {
+                const l = Math.min(startX, currentX), w = Math.abs(currentX - startX);
+                ghostBox.style.left = l + 'px'; ghostBox.style.width = w + 'px';
+            } else if (isMoving && movingEvent) {
+                hasDragged = true; 
+                const dur = movingEvent.endMonth - movingEvent.startMonth;
+                movingEvent.startMonth = viewStartM + ((currentX - offsetLeft) / rect.width) * totalM;
+                movingEvent.endMonth = movingEvent.startMonth + dur;
+                renderEvents();
+            } else if (isResizing && movingEvent) {
+                hasDragged = true;
+                const dx = currentX - startX;
+                const dMonth = (dx / rect.width) * totalM;
+
+                if (resizeSide === 'left') {
+                    // 최소 길이 0.2개월 유지하며 왼쪽 늘리기/줄이기
+                    movingEvent.startMonth = Math.min(initialStartM + dMonth, movingEvent.endMonth - 0.2);
+                } else if (resizeSide === 'right') {
+                    // 최소 길이 0.2개월 유지하며 오른쪽 늘리기/줄이기
+                    movingEvent.endMonth = Math.max(initialEndM + dMonth, movingEvent.startMonth + 0.2);
+                }
+                renderEvents();
+            }
+        };
+
+        // 전역 마우스 업 (작업 완료)
+        document.onmouseup = () => {
+            if (isCreating) {
+                const l = parseFloat(ghostBox.style.left), w = parseFloat(ghostBox.style.width);
+                if (w > 15) {
+                    const rect = container.getBoundingClientRect();
+                    const sM = viewStartM + (l / rect.width) * totalM;
+                    const eM = viewStartM + ((l + w) / rect.width) * totalM;
+                    openModal(null, sM, eM);
+                }
+            }
+            isCreating = false; isMoving = false; isResizing = false; movingEvent = null; resizeSide = null;
+            ghostBox.style.display = 'none';
+        };
+
+        function renderPalette() {
+            const p = document.getElementById('palette-container'); p.innerHTML = '';
+            colors.forEach(c => { const opt = document.createElement('div'); opt.className = `color-opt ${c === selectedColor ? 'active' : ''}`; opt.style.backgroundColor = c; opt.onclick = () => { selectedColor = c; renderPalette(); }; p.appendChild(opt); });
+        }
+
+        let tmpS, tmpE;
+        function openModal(id = null, s = null, e = null) {
+            if(!currentUser) { alert("로그인이 필요합니다."); return; }
+            selectedId = id;
+            if (id) {
+                const ev = events.find(i => i.id === id);
+                document.getElementById('ev-title').value = ev.title; document.getElementById('ev-content').value = ev.content;
+                selectedColor = ev.color; document.getElementById('btn-del').style.display = 'block';
+            } else {
+                document.getElementById('ev-title').value = ''; document.getElementById('ev-content').value = '';
+                selectedColor = colors[0]; document.getElementById('btn-del').style.display = 'none'; 
+                tmpS = s || viewStartM; tmpE = e || Math.min(viewStartM + 1, viewEndM);
+            }
+            renderPalette(); overlay.style.display = modal.style.display = 'block';
+        }
+
+        function closeModal() { overlay.style.display = modal.style.display = 'none'; }
+        
+        function saveEvent() {
+            const t = document.getElementById('ev-title').value || '제목 없음', c = document.getElementById('ev-content').value;
+            if (selectedId) { const target = events.find(i => i.id === selectedId); target.title = t; target.content = c; target.color = selectedColor; } 
+            else { events.push({ id: Date.now(), title: t, content: c, color: selectedColor, startMonth: tmpS, endMonth: tmpE }); }
+            renderEvents(); closeModal();
+        }
+
+        function deleteEvent() { if(confirm('삭제할까요?')) { events = events.filter(i => i.id !== selectedId); renderEvents(); closeModal(); } }
+
+        async function manualSave() { 
+            if(!currentUser) { alert("로그인이 필요합니다."); return; }
+            showLoading(true);
+            try { await setDoc(docRef, { events: events }); alert('☁️ 데이터가 안전하게 저장되었습니다!'); } 
+            catch(e) { alert('저장 권한이 없습니다. 관리자에게 문의하세요.'); }
+            showLoading(false);
+        }
+
+        init();
+    </script>
+</body>
+</html>
